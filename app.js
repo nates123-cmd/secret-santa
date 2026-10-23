@@ -1,8 +1,10 @@
 import * as L from './lib.js'
 
 const $app = document.getElementById('app')
-const code = new URLSearchParams(location.hash.slice(1)).get('g')
-const KEY = `santa:${code}`
+const LAST = 'santa:last'
+const normPw = (s) => String(s || '').trim().toLowerCase()
+let code = normPw(new URLSearchParams(location.hash.slice(1)).get('g')) || (() => { try { return localStorage.getItem(LAST) } catch { return null } })()
+let KEY = `santa:${code}`
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const fmtReveal = (iso) => new Date(iso).toLocaleString('en-US', {
@@ -35,71 +37,39 @@ function pickName() {
       <h2>Who are you?</h2>
       <p class="muted small">Tap your name. This only happens once on each phone.</p>
       <div class="names">${group.members.map((m) => `
-        <button class="name-btn" data-id="${m.id}">${esc(m.name)}<span class="tag">${m.claimed ? 'joined' : ''}</span></button>`).join('')}
+        <button class="name-btn" data-id="${m.id}" ${m.claimed ? 'disabled' : ''}>${esc(m.name)}<span class="tag">${m.claimed ? 'taken' : ''}</span></button>`).join('')}
       </div>
     </section>
     ${privacyNote()}`)
   $app.querySelectorAll('.name-btn').forEach((b) => b.onclick = () => {
     const m = group.members.find((x) => x.id === b.dataset.id)
-    m.claimed ? restore(m) : join(m)
+    if (!m.claimed) join(m)
   })
 }
 
 async function join(m) {
   if (group.draw) { render(`${header()}<section class="card"><p>The draw already happened, so new people can't join.</p></section>`); return }
-  const rc = L.newRecoveryCode()
   render(`${header()}
     <section class="card stack">
-      <h2>Hi ${esc(m.name)}</h2>
-      <p>This is your recovery code. You only need it if you switch phones or clear your browser. Take a screenshot or save it in your notes.</p>
-      <div class="code">${rc}</div>
-      <label class="check"><input type="checkbox" id="saved"> I saved my recovery code</label>
-      <button id="go" disabled>Join</button>
+      <h2>You're ${esc(m.name)}?</h2>
+      <p class="muted">This phone will be the one that opens your match, so use the phone you'll have at Christmas.</p>
+      <button id="go">Yes, I'm ${esc(m.name)}</button>
       <button class="link" id="back">That's not me</button>
       <p class="error" id="err"></p>
     </section>`)
-  const go = $app.querySelector('#go')
-  $app.querySelector('#saved').onchange = (e) => { go.disabled = !e.target.checked }
   $app.querySelector('#back').onclick = pickName
+  const go = $app.querySelector('#go')
   go.onclick = async () => {
     go.disabled = true; go.textContent = 'Joining...'
     try {
       const kp = await L.newKeyPair(), token = L.newToken()
-      const backup = await L.lockBackup(rc, { priv: kp.priv, token })
-      await L.api.claim(code, m.id, kp.pub, backup, token)
-      me = { memberId: m.id, priv: kp.priv, token, rc }
+      await L.api.claim(code, m.id, kp.pub, null, token)
+      me = { memberId: m.id, priv: kp.priv, token }
       saveMe(me)
       await refresh()
     } catch (e) {
       $app.querySelector('#err').textContent = e.message
-      go.disabled = false; go.textContent = 'Join'
-    }
-  }
-}
-
-function restore(m) {
-  render(`${header()}
-    <section class="card stack">
-      <h2>Welcome back, ${esc(m.name)}</h2>
-      <p class="muted">You joined on another phone or browser. Enter your recovery code to open your match here.</p>
-      <input id="rc" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX">
-      <button id="go">Unlock</button>
-      <button class="link" id="back">That's not me</button>
-      <p class="error" id="err"></p>
-    </section>`)
-  $app.querySelector('#back').onclick = pickName
-  const go = $app.querySelector('#go')
-  go.onclick = async () => {
-    go.disabled = true; go.textContent = 'Unlocking...'
-    try {
-      const rc = $app.querySelector('#rc').value
-      const s = await L.unlockBackup(rc, await L.api.backup(code, m.id))
-      me = { memberId: m.id, priv: s.priv, token: s.token, rc: rc.toUpperCase().trim() }
-      saveMe(me)
-      await refresh()
-    } catch (e) {
-      $app.querySelector('#err').textContent = e.message
-      go.disabled = false; go.textContent = 'Unlock'
+      go.disabled = false; go.textContent = `Yes, I'm ${m.name}`
     }
   }
 }
@@ -111,7 +81,7 @@ async function home() {
   let match = null, matchErr = ''
   if (group.draw) {
     try { match = await L.openBox(me.priv, group.draw.assignments[me.memberId]) }
-    catch { matchErr = "This phone can't open your match. Tap \"Not you?\" below and sign in with your recovery code." }
+    catch { matchErr = "This phone can't open your match. Ask the host for help." }
   }
   const them = match && group.members.find((m) => m.id === match.to)
 
@@ -123,6 +93,7 @@ async function home() {
           <div class="big-name">${esc(match.name)}</div>
           <p class="eyebrow">Their wishlist</p>
           ${them?.wishlist ? `<p class="wish">${esc(them.wishlist)}</p>` : `<p class="muted">${esc(match.name)} hasn't added a wishlist yet.</p>`}
+          <p class="note">Take a screenshot of this. Your match only opens on this phone.</p>
         ` : `<p class="error">${esc(matchErr)}</p>`}
       </section>` : `
       <section class="card">
@@ -156,7 +127,6 @@ async function home() {
 
     <footer class="stack">
       <div>Signed in as ${esc(mine.name)}.
-        ${me.rc ? `<button class="link" id="showrc">Show recovery code</button> &middot;` : ''}
         <button class="link" id="notme">Not you?</button></div>
       <div id="rcbox"></div>
     </footer>`)
@@ -168,11 +138,8 @@ async function home() {
     catch (e) { msg.textContent = e.message }
   }
   $app.querySelector('#notme').onclick = () => {
-    if (confirmInline('#rcbox', "You'll need your recovery code to get back in on this phone.", 'Sign out', () => { forgetMe(); me = null; pickName() })) return
+    if (confirmInline('#rcbox', "Signing out removes your key from this phone. Your match won't open here again.", 'Sign out', () => { forgetMe(); me = null; pickName() })) return
   }
-  $app.querySelector('#showrc')?.addEventListener('click', () => {
-    $app.querySelector('#rcbox').innerHTML = `<div class="code">${esc(me.rc)}</div>`
-  })
   const draw = $app.querySelector('#draw')
   if (draw) draw.onclick = () => confirmInline('#drawbox', 'The draw is final and can\'t be redone from the app. Ready?', 'Yes, draw names', doDraw)
   renderReveal()
@@ -225,9 +192,32 @@ function privacyNote() {
 }
 
 // ---------- boot ----------
-if (!code) {
-  render(`<h1>Secret Santa</h1><p class="sub">Open the invite link the host sent you.</p>`)
-} else {
-  refresh().catch((e) => render(`<h1>Secret Santa</h1><p class="error">${esc(e.message === 'unknown group' ? "This invite link doesn't work. Ask the host for a fresh one." : e.message)}</p>`))
+function passwordScreen(err = '') {
+  render(`<img class="hero" src="hero.jpg" alt="" onerror="this.remove()">
+    <h1>Secret Santa</h1>
+    <p class="sub">Enter the group password to join.</p>
+    <section class="card stack">
+      <input id="pw" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Group password">
+      <button id="go">Continue</button>
+      <p class="error" id="err">${esc(err)}</p>
+    </section>`)
+  const pw = $app.querySelector('#pw'), go = $app.querySelector('#go')
+  pw.onkeydown = (e) => { if (e.key === 'Enter') go.click() }
+  go.onclick = () => { open(normPw(pw.value)) }
 }
+
+async function open(pw) {
+  if (!pw) return passwordScreen()
+  code = pw; KEY = `santa:${code}`; me = loadMe()
+  try {
+    await refresh()
+    try { localStorage.setItem(LAST, code) } catch {}
+  } catch (e) {
+    try { localStorage.removeItem(LAST) } catch {}
+    passwordScreen(e.message === 'unknown group' ? "That password doesn't match a group." : e.message)
+  }
+}
+
+open(code)
 window.addEventListener('hashchange', () => location.reload())
+
