@@ -1,0 +1,4 @@
+node_modules/
+supabase/.temp/
+.claude/worktrees/
+.DS_Store
