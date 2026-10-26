@@ -17,15 +17,38 @@ function forgetMe() { try { localStorage.removeItem(KEY) } catch {} }
 
 let group = null
 let me = loadMe()
+let photo = null
+let ideas = []
 let revealTimer = null
 
 const render = (html) => { $app.innerHTML = html }
 const header = () => `
+  ${photo ? `<figure class="feature-photo"><img src="${photo}" alt="Leo the elf in a Santa hat"><figcaption>Leo the Elf is watching</figcaption></figure>` : ''}
   <h1>${esc(group.name)}</h1>
   <p class="sub">${group.budget ? `Budget: ${esc(group.budget)} &middot; ` : ''}Full list opens ${esc(fmtReveal(group.reveal_at))}</p>`
 
+async function loadPhoto() {
+  const k = `santa:photo:${code}`
+  try { photo = localStorage.getItem(k) } catch {}
+  if (!photo) {
+    try {
+      const p = await L.api.photo(code)
+      photo = p?.photo || null
+      if (photo) { try { localStorage.setItem(k, photo) } catch {} }
+      if (p?.icon) { try { localStorage.setItem(`${k}:icon`, p.icon) } catch {} }
+    } catch {}
+  }
+  if (!photo) photo = ''
+  let icon = null
+  try { icon = localStorage.getItem(`${k}:icon`) } catch {}
+  if (icon) for (const rel of ['icon', 'apple-touch-icon']) {
+    const l = document.createElement('link'); l.rel = rel; l.href = icon; document.head.appendChild(l)
+  }
+}
+
 async function refresh() {
   group = await L.api.group(code)
+  if (photo === null) await loadPhoto()
   if (me && !group.members.some((m) => m.id === me.memberId)) { forgetMe(); me = null }
   me ? home() : pickName()
 }
@@ -84,6 +107,12 @@ async function home() {
     catch { matchErr = "This phone can't open your match. Ask the host for help." }
   }
   const them = match && group.members.find((m) => m.id === match.to)
+  try { ideas = await L.api.ideas(code, me.memberId, me.token) } catch { ideas = [] }
+  const others = group.members.filter((m) => m.id !== me.memberId)
+  const ideaList = (about) => {
+    const list = ideas.filter((i) => i.about === about)
+    return list.length ? `<ul class="ideas">${list.map((i) => `<li><span>${esc(i.body)}</span>${i.mine ? `<button class="link del-idea" data-id="${i.id}">Remove</button>` : ''}</li>`).join('')}</ul>` : ''
+  }
 
   render(`${header()}
     ${group.draw ? `
@@ -93,6 +122,8 @@ async function home() {
           <div class="big-name">${esc(match.name)}</div>
           <p class="eyebrow">Their wishlist</p>
           ${them?.wishlist ? `<p class="wish">${esc(them.wishlist)}</p>` : `<p class="muted">${esc(match.name)} hasn't added a wishlist yet.</p>`}
+          <p class="eyebrow" style="margin-top:14px">Ideas from the group</p>
+          ${ideaList(match.to) || `<p class="muted small">No ideas yet. The group can add them below.</p>`}
           <p class="note">Take a screenshot of this. Your match only opens on this phone.</p>
         ` : `<p class="error">${esc(matchErr)}</p>`}
       </section>` : `
@@ -109,6 +140,16 @@ async function home() {
       <textarea id="wl" placeholder="Ideas, sizes, links, things to avoid...">${esc(mine.wishlist)}</textarea>
       <div class="row"><button id="savewl" class="secondary">Save wishlist</button></div>
       <p class="small muted" id="wlmsg"></p>
+    </section>
+
+    <section class="card stack" id="ideas">
+      <h2>Gift ideas</h2>
+      <p class="muted small">Know what someone would love? Add it here. Ideas are anonymous, and nobody sees the ideas about themselves.</p>
+      <select id="ideafor">${others.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
+      <input id="ideatext" maxlength="500" placeholder="e.g. Has been eyeing a cast iron pan">
+      <button id="addidea" class="secondary">Add idea</button>
+      <p class="error" id="ideaerr"></p>
+      ${others.map((m) => ideas.some((i) => i.about === m.id) ? `<div><p class="eyebrow">For ${esc(m.name)}</p>${ideaList(m.id)}</div>` : '').join('')}
     </section>
 
     <section class="card" id="reveal">
@@ -140,6 +181,17 @@ async function home() {
   $app.querySelector('#notme').onclick = () => {
     if (confirmInline('#rcbox', "Signing out removes your key from this phone. Your match won't open here again.", 'Sign out', () => { forgetMe(); me = null; pickName() })) return
   }
+  const ideaText = $app.querySelector('#ideatext'), ideaErr = $app.querySelector('#ideaerr')
+  ideaText.onkeydown = (e) => { if (e.key === 'Enter') $app.querySelector('#addidea').click() }
+  $app.querySelector('#addidea').onclick = async (e) => {
+    if (!ideaText.value.trim()) return
+    e.target.disabled = true
+    try { await L.api.addIdea(code, me.memberId, me.token, $app.querySelector('#ideafor').value, ideaText.value); await home() }
+    catch (err) { ideaErr.textContent = err.message; e.target.disabled = false }
+  }
+  $app.querySelectorAll('.del-idea').forEach((b) => b.onclick = async () => {
+    try { await L.api.deleteIdea(code, me.memberId, me.token, b.dataset.id); await home() } catch (err) { ideaErr.textContent = err.message }
+  })
   const draw = $app.querySelector('#draw')
   if (draw) draw.onclick = () => confirmInline('#drawbox', 'The draw is final and can\'t be redone from the app. Ready?', 'Yes, draw names', doDraw)
   renderReveal()
@@ -193,8 +245,7 @@ function privacyNote() {
 
 // ---------- boot ----------
 function passwordScreen(err = '') {
-  render(`<img class="hero" src="hero.jpg" alt="" onerror="this.remove()">
-    <h1>Secret Santa</h1>
+  render(`<h1>Secret Santa</h1>
     <p class="sub">Enter the group password to join.</p>
     <section class="card stack">
       <input id="pw" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Group password">

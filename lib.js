@@ -35,6 +35,12 @@ export const api = {
   backup: (code, member) => rpc('santa_backup', { p_code: code, p_member: member }),
   wishlist: (code, member, token, wishlist) =>
     rpc('santa_wishlist', { p_code: code, p_member: member, p_token: token, p_wishlist: wishlist }),
+  photo: (code) => rpc('santa_photo', { p_code: code }),
+  ideas: (code, member, token) => rpc('santa_ideas_for', { p_code: code, p_member: member, p_token: token }),
+  addIdea: (code, member, token, about, body) =>
+    rpc('santa_add_idea', { p_code: code, p_member: member, p_token: token, p_about: about, p_body: body }),
+  deleteIdea: (code, member, token, id) =>
+    rpc('santa_delete_idea', { p_code: code, p_member: member, p_token: token, p_id: id }),
   draw: (code, assignments, revealCt, revealRound) =>
     rpc('santa_draw', { p_code: code, p_assignments: assignments, p_reveal_ct: revealCt, p_reveal_round: revealRound }),
 }
