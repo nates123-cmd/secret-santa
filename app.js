@@ -7,6 +7,24 @@ let code = normPw(new URLSearchParams(location.hash.slice(1)).get('g')) || (() =
 let KEY = `santa:${code}`
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+// Lists and links in free text: each line (or inline "- [ ]" item) becomes a bullet, URLs become short tappable links.
+const URL_RE = /https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g
+const linkify = (s) => {
+  let out = '', last = 0
+  for (const m of s.matchAll(URL_RE)) {
+    let label = m[0]
+    try { const u = new URL(m[0]); label = u.hostname.replace(/^www\./, '') + (u.pathname.length > 1 || u.search ? '/…' : '') } catch {}
+    out += esc(s.slice(last, m.index)) + `<a href="${esc(m[0])}" target="_blank" rel="noopener">${esc(label)}</a>`
+    last = m.index + m[0].length
+  }
+  return out + esc(s.slice(last))
+}
+const splitItems = (s) => String(s ?? '').split(/\n|\s(?=-\s*\[[ xX]?\])|\s(?=•)/)
+  .map((t) => t.replace(/^\s*(?:[-*•]|\d+[.)])?\s*(?:\[[ xX]?\]\s*)?/, '').trim()).filter(Boolean)
+const rich = (s) => {
+  const items = splitItems(s)
+  return items.length > 1 ? `<ul class="items">${items.map((t) => `<li>${linkify(t)}</li>`).join('')}</ul>` : `<span>${linkify(items[0] || '')}</span>`
+}
 const fmtReveal = (iso) => new Date(iso).toLocaleString('en-US', {
   timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
 }) + ' ET'
@@ -111,7 +129,7 @@ async function home() {
   const others = group.members.filter((m) => m.id !== me.memberId)
   const ideaList = (about) => {
     const list = ideas.filter((i) => i.about === about)
-    return list.length ? `<ul class="ideas">${list.map((i) => `<li><span>${esc(i.body)}</span>${i.mine ? `<button class="link del-idea" data-id="${i.id}">Remove</button>` : ''}</li>`).join('')}</ul>` : ''
+    return list.length ? `<ul class="ideas">${list.map((i) => `<li><div class="idea-body">${rich(i.body)}</div>${i.mine ? `<button class="link del-idea" data-id="${i.id}">Remove</button>` : ''}</li>`).join('')}</ul>` : ''
   }
 
   render(`${header()}
@@ -121,7 +139,7 @@ async function home() {
         ${match ? `
           <div class="big-name">${esc(match.name)}</div>
           <p class="eyebrow">Their wishlist</p>
-          ${them?.wishlist ? `<p class="wish">${esc(them.wishlist)}</p>` : `<p class="muted">${esc(match.name)} hasn't added a wishlist yet.</p>`}
+          ${them?.wishlist ? `<div class="wish">${rich(them.wishlist)}</div>` : `<p class="muted">${esc(match.name)} hasn't added a wishlist yet.</p>`}
           <p class="eyebrow" style="margin-top:14px">Ideas from the group</p>
           ${ideaList(match.to) || `<p class="muted small">No ideas yet. The group can add them below.</p>`}
           <p class="note">Take a screenshot of this. Your match only opens on this phone.</p>
@@ -146,7 +164,8 @@ async function home() {
       <h2>Gift ideas</h2>
       <p class="muted small">Know what someone would love? Add it here. Ideas are anonymous, and nobody sees the ideas about themselves.</p>
       <select id="ideafor">${others.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
-      <input id="ideatext" maxlength="500" placeholder="e.g. Has been eyeing a cast iron pan">
+      <textarea id="ideatext" class="short" placeholder="e.g. Has been eyeing a cast iron pan"></textarea>
+      <p class="muted small">One idea per line. Each line becomes its own item.</p>
       <button id="addidea" class="secondary">Add idea</button>
       <p class="error" id="ideaerr"></p>
       ${others.map((m) => ideas.some((i) => i.about === m.id) ? `<div><p class="eyebrow">For ${esc(m.name)}</p>${ideaList(m.id)}</div>` : '').join('')}
@@ -182,11 +201,12 @@ async function home() {
     if (confirmInline('#rcbox', "Signing out removes your key from this phone. Your match won't open here again.", 'Sign out', () => { forgetMe(); me = null; pickName() })) return
   }
   const ideaText = $app.querySelector('#ideatext'), ideaErr = $app.querySelector('#ideaerr')
-  ideaText.onkeydown = (e) => { if (e.key === 'Enter') $app.querySelector('#addidea').click() }
   $app.querySelector('#addidea').onclick = async (e) => {
-    if (!ideaText.value.trim()) return
+    const items = splitItems(ideaText.value)
+    if (!items.length) return
     e.target.disabled = true
-    try { await L.api.addIdea(code, me.memberId, me.token, $app.querySelector('#ideafor').value, ideaText.value); await home() }
+    const about = $app.querySelector('#ideafor').value
+    try { for (const t of items) await L.api.addIdea(code, me.memberId, me.token, about, t); await home() }
     catch (err) { ideaErr.textContent = err.message; e.target.disabled = false }
   }
   $app.querySelectorAll('.del-idea').forEach((b) => b.onclick = async () => {
