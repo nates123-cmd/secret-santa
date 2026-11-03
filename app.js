@@ -193,7 +193,11 @@ async function home() {
   }
   const them = match && group.members.find((m) => m.id === match.to)
   try { ideas = await L.api.ideas(code, me.memberId, me.token) } catch { ideas = [] }
-  const others = group.members.filter((m) => m.id !== me.memberId)
+  const PICK = `${KEY}:pick:${me.memberId}`
+  let pick = null
+  try { pick = localStorage.getItem(PICK) } catch {}
+  if (!group.members.some((m) => m.id === pick)) pick = match?.to || group.members.find((m) => m.id !== me.memberId)?.id || me.memberId
+  const picked = group.members.find((m) => m.id === pick)
   const ideaList = (about) => {
     const list = ideas.filter((i) => i.about === about)
     return list.length ? `<ul class="ideas">${list.map((i) => `<li><div class="idea-body">${rich(i.body)}</div>${i.mine ? `<button class="link del-idea" data-id="${i.id}">Remove</button>` : ''}</li>`).join('')}</ul>` : ''
@@ -226,22 +230,29 @@ async function home() {
           : `<div class="stack" id="drawbox"><p class="muted small">Everyone's in. The draw runs on this phone, seals each match so only that person can open it, and locks the full list until Christmas. Nobody sees it, including whoever presses the button.</p><button id="draw">Run the draw</button></div>`}
       </section>`}
 
+    <section class="card stack" id="ideas">
+      <h2>Gift ideas</h2>
+      <p class="muted small">Pick someone to see their wishlist and the group's ideas, or add your own. Ideas are anonymous. You can suggest gifts for yourself too; ideas others add for you stay a surprise.</p>
+      <select id="ideafor">${group.members.map((m) => {
+        const n = ideas.filter((i) => i.about === m.id).length
+        return `<option value="${m.id}" ${m.id === pick ? 'selected' : ''}>${m.id === me.memberId ? 'Me' : esc(m.name)}${n ? ` (${n})` : ''}</option>`
+      }).join('')}</select>
+      ${pick !== me.memberId ? `
+        <p class="eyebrow">${esc(picked.name)}'s wishlist</p>
+        ${picked.wishlist ? `<div class="wish">${rich(picked.wishlist)}</div>` : `<p class="muted small">${esc(picked.name)} hasn't added a wishlist yet.</p>`}` : ''}
+      <p class="eyebrow">${pick === me.memberId ? 'Ideas you suggested for yourself' : `Ideas for ${esc(picked.name)}`}</p>
+      ${ideaList(pick) || `<p class="muted small">No ideas yet.</p>`}
+      <textarea id="ideatext" class="short" placeholder="${pick === me.memberId ? 'e.g. I could use new running gloves' : 'e.g. Has been eyeing a cast iron pan'}"></textarea>
+      <p class="muted small">One idea per line. Each line becomes its own item.</p>
+      <button id="addidea" class="secondary">Add idea${pick === me.memberId ? ' for me' : ` for ${esc(picked.name)}`}</button>
+      <p class="error" id="ideaerr"></p>
+    </section>
+
     <section class="card stack">
       <h2>Your wishlist</h2>
       <textarea id="wl" placeholder="Ideas, sizes, links, things to avoid...">${esc(mine.wishlist)}</textarea>
       <div class="row"><button id="savewl" class="secondary">Save wishlist</button></div>
       <p class="small muted" id="wlmsg"></p>
-    </section>
-
-    <section class="card stack" id="ideas">
-      <h2>Gift ideas</h2>
-      <p class="muted small">Know what someone would love? Add it here. Ideas are anonymous, and nobody sees the ideas about themselves.</p>
-      <select id="ideafor">${others.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select>
-      <textarea id="ideatext" class="short" placeholder="e.g. Has been eyeing a cast iron pan"></textarea>
-      <p class="muted small">One idea per line. Each line becomes its own item.</p>
-      <button id="addidea" class="secondary">Add idea</button>
-      <p class="error" id="ideaerr"></p>
-      ${others.map((m) => ideas.some((i) => i.about === m.id) ? `<div><p class="eyebrow">For ${esc(m.name)}</p>${ideaList(m.id)}</div>` : '').join('')}
     </section>
 
     <section class="card" id="reveal">
@@ -283,11 +294,12 @@ async function home() {
     onJwt: async (jwt) => { await L.api.setEmail(code, me.memberId, me.token, jwt); await refresh() },
   })
   const ideaText = $app.querySelector('#ideatext'), ideaErr = $app.querySelector('#ideaerr')
+  $app.querySelector('#ideafor').onchange = (e) => { try { localStorage.setItem(PICK, e.target.value) } catch {}; home() }
   $app.querySelector('#addidea').onclick = async (e) => {
     const items = splitItems(ideaText.value)
     if (!items.length) return
     e.target.disabled = true
-    const about = $app.querySelector('#ideafor').value
+    const about = pick
     try { for (const t of items) await L.api.addIdea(code, me.memberId, me.token, about, t); await home() }
     catch (err) { ideaErr.textContent = err.message; e.target.disabled = false }
   }

@@ -111,3 +111,25 @@ revoke all on function public.santa_login(text,uuid,text), public.santa_set_emai
 grant execute on function public.santa_login(text,uuid,text), public.santa_set_email(text,uuid,text) to anon, authenticated;
 grant execute on function public.santa_group(text), public.santa_claim(text,uuid,jsonb,jsonb,text),
   public.santa_wishlist(text,uuid,text,text) to anon, authenticated;
+
+-- Ideas: you can suggest gifts for anyone, yourself included. You see every idea except the ones
+-- other people wrote about you (those stay a surprise); your own self-suggestions show.
+create or replace function public.santa_ideas_for(p_code text, p_member uuid, p_token text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare gid uuid := public.santa_member_ok(p_code, p_member, p_token);
+begin
+  if gid is null then raise exception 'not allowed'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'about', i.about, 'body', i.body,
+      'mine', i.author = p_member) order by i.created_at)
+    from public.santa_ideas i where i.group_id = gid and (i.about <> p_member or i.author = p_member)), '[]'::jsonb);
+end $$;
+
+create or replace function public.santa_add_idea(p_code text, p_member uuid, p_token text, p_about uuid, p_body text)
+returns void language plpgsql security definer set search_path = public as $$
+declare gid uuid := public.santa_member_ok(p_code, p_member, p_token);
+begin
+  if gid is null then raise exception 'not allowed'; end if;
+  if not exists (select 1 from public.santa_members where id = p_about and group_id = gid) then raise exception 'unknown person'; end if;
+  if length(trim(coalesce(p_body, ''))) = 0 then raise exception 'empty idea'; end if;
+  insert into public.santa_ideas (group_id, about, author, body) values (gid, p_about, p_member, left(trim(p_body), 500));
+end $$;
