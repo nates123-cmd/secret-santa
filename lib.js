@@ -14,24 +14,34 @@ export const b64 = (buf) => {
 export const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
 
 // ---------- API ----------
-async function rpc(fn, args) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+async function post(path, args, jwt) {
+  const r = await fetch(`${SUPABASE_URL}${path}`, {
     method: 'POST',
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${jwt || SUPABASE_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(args),
   })
   const text = await r.text()
   if (!r.ok) {
     let msg = text
-    try { msg = JSON.parse(text).message || text } catch {}
+    try { const j = JSON.parse(text); msg = j.message || j.msg || j.error_description || j.error || text } catch {}
     throw new Error(msg)
   }
   return text ? JSON.parse(text) : null
 }
+const rpc = (fn, args, jwt) => post(`/rest/v1/rpc/${fn}`, args, jwt)
+
+// Email codes come from Supabase Auth (suite project); the JWT proves the address to the santa_* RPCs.
+export const auth = {
+  sendCode: (email) => post('/auth/v1/otp', { email, create_user: true }),
+  verify: async (email, token) => (await post('/auth/v1/verify', { type: 'email', email, token })).access_token,
+}
+
 export const api = {
   group: (code) => rpc('santa_group', { p_code: code }),
-  claim: (code, member, pubkey, backup, token) =>
-    rpc('santa_claim', { p_code: code, p_member: member, p_pubkey: pubkey, p_backup: backup, p_token: token }),
+  claim: (code, member, pubkey, backup, token, jwt) =>
+    rpc('santa_claim', { p_code: code, p_member: member, p_pubkey: pubkey, p_backup: backup, p_token: token }, jwt),
+  login: (code, member, token, jwt) => rpc('santa_login', { p_code: code, p_member: member, p_token: token }, jwt),
+  setEmail: (code, member, token, jwt) => rpc('santa_set_email', { p_code: code, p_member: member, p_token: token }, jwt),
   backup: (code, member) => rpc('santa_backup', { p_code: code, p_member: member }),
   wishlist: (code, member, token, wishlist) =>
     rpc('santa_wishlist', { p_code: code, p_member: member, p_token: token, p_wishlist: wishlist }),

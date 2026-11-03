@@ -1,4 +1,4 @@
-import * as L from './lib.js'
+import * as L from './lib.js?v=3'
 
 const $app = document.getElementById('app')
 const LAST = 'santa:last'
@@ -29,9 +29,28 @@ const fmtReveal = (iso) => new Date(iso).toLocaleString('en-US', {
   timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
 }) + ' ET'
 
-function loadMe() { try { return JSON.parse(localStorage.getItem(KEY)) } catch { return null } }
-function saveMe(v) { try { localStorage.setItem(KEY, JSON.stringify(v)) } catch {} }
+// The match key is kept per member on this phone, apart from the session, so signing out and
+// back in on the same phone still opens the match. A new phone gets ideas + wishlist, not the match.
+const keyStore = (id) => `${KEY}:key:${id}`
+function loadKey(id) { try { return JSON.parse(localStorage.getItem(keyStore(id))) } catch { return null } }
+function saveKey(id, priv) { try { if (priv) localStorage.setItem(keyStore(id), JSON.stringify(priv)) } catch {} }
+function loadMe() {
+  let v = null
+  try { v = JSON.parse(localStorage.getItem(KEY)) } catch {}
+  if (v?.priv) saveKey(v.memberId, v.priv)
+  else if (v) v.priv = loadKey(v.memberId)
+  return v
+}
+function saveMe(v) { saveKey(v.memberId, v.priv); try { localStorage.setItem(KEY, JSON.stringify(v)) } catch {} }
 function forgetMe() { try { localStorage.removeItem(KEY) } catch {} }
+const normEmail = (s) => String(s || '').trim().toLowerCase()
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const friendly = (msg) => ({
+  'wrong email': "That isn't the email on this name.",
+  'verify your email first': 'Please confirm your email again.',
+  'already drawn': "The draw already happened, so new people can't join.",
+  'name already claimed': 'Someone already joined as this name. Go back and tap it again to log in.',
+}[msg] || (/expired|invalid/i.test(msg) ? "That code didn't work. Check it, or send a new one." : msg))
 
 let group = null
 let me = loadMe()
@@ -76,43 +95,88 @@ function pickName() {
   render(`${header()}
     <section class="card">
       <h2>Who are you?</h2>
-      <p class="muted small">Tap your name. This only happens once on each phone.</p>
+      <p class="muted small">Tap your name, then confirm with your email.</p>
       <div class="names">${group.members.map((m) => `
-        <button class="name-btn" data-id="${m.id}" ${m.claimed ? 'disabled' : ''}>${esc(m.name)}<span class="tag">${m.claimed ? 'taken' : ''}</span></button>`).join('')}
+        <button class="name-btn" data-id="${m.id}" ${!m.claimed && group.draw ? 'disabled' : ''}>${esc(m.name)}<span class="tag">${m.claimed ? 'log in' : ''}</span></button>`).join('')}
       </div>
     </section>
     ${privacyNote()}`)
   $app.querySelectorAll('.name-btn').forEach((b) => b.onclick = () => {
     const m = group.members.find((x) => x.id === b.dataset.id)
-    if (!m.claimed) join(m)
+    emailStep(m)
   })
 }
 
-async function join(m) {
-  if (group.draw) { render(`${header()}<section class="card"><p>The draw already happened, so new people can't join.</p></section>`); return }
-  render(`${header()}
-    <section class="card stack">
-      <h2>You're ${esc(m.name)}?</h2>
-      <p class="muted">This phone will be the one that opens your match, so use the phone you'll have at Christmas.</p>
-      <button id="go">Yes, I'm ${esc(m.name)}</button>
-      <button class="link" id="back">That's not me</button>
-      <p class="error" id="err"></p>
-    </section>`)
-  $app.querySelector('#back').onclick = pickName
-  const go = $app.querySelector('#go')
-  go.onclick = async () => {
-    go.disabled = true; go.textContent = 'Joining...'
-    try {
-      const kp = await L.newKeyPair(), token = L.newToken()
-      await L.api.claim(code, m.id, kp.pub, null, token)
-      me = { memberId: m.id, priv: kp.priv, token }
-      saveMe(me)
-      await refresh()
-    } catch (e) {
-      $app.querySelector('#err').textContent = e.message
-      go.disabled = false; go.textContent = `Yes, I'm ${m.name}`
+// Email + code, shared by joining, logging back in, and adding an email while signed in.
+// Renders into `box`; calls onJwt(jwt) once the code checks out.
+function otpFlow(box, { intro, email = '', onJwt, onBack }) {
+  box.innerHTML = `
+    <p class="muted">${intro}</p>
+    <input id="em" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" value="${esc(email)}">
+    <button id="send">Email me a code</button>
+    ${onBack ? '<button class="link" id="back">Back</button>' : ''}
+    <p class="error" id="oerr"></p>`
+  box.classList.add('stack')
+  if (onBack) box.querySelector('#back').onclick = onBack
+  const em = box.querySelector('#em'), send = box.querySelector('#send'), err = box.querySelector('#oerr')
+  em.onkeydown = (e) => { if (e.key === 'Enter') send.click() }
+  send.onclick = async () => {
+    const address = normEmail(em.value)
+    if (!EMAIL_RE.test(address)) { err.textContent = 'Enter your email address.'; return }
+    send.disabled = true; send.textContent = 'Sending...'; err.textContent = ''
+    try { await L.auth.sendCode(address) } catch (e) {
+      err.textContent = /rate|seconds/i.test(e.message) ? 'Too many codes just now. Wait a minute and try again.' : e.message
+      send.disabled = false; send.textContent = 'Email me a code'; return
+    }
+    box.innerHTML = `
+      <p class="muted">We sent a code to <strong>${esc(address)}</strong>. It can take a minute; check spam too.</p>
+      <input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code">
+      <button id="verify">Continue</button>
+      <button class="link" id="again">Use a different email</button>
+      <p class="error" id="oerr"></p>`
+    const otp = box.querySelector('#otp'), verify = box.querySelector('#verify'), err2 = box.querySelector('#oerr')
+    otp.focus()
+    box.querySelector('#again').onclick = () => otpFlow(box, { intro, email: address, onJwt, onBack })
+    otp.onkeydown = (e) => { if (e.key === 'Enter') verify.click() }
+    verify.onclick = async () => {
+      const t = otp.value.replace(/\D/g, '')
+      if (t.length < 6) { err2.textContent = 'Enter the code from the email.'; return }
+      verify.disabled = true; verify.textContent = 'Checking...'; err2.textContent = ''
+      try { await onJwt(await L.auth.verify(address, t)) } catch (e) {
+        err2.textContent = friendly(e.message)
+        verify.disabled = false; verify.textContent = 'Continue'
+      }
     }
   }
+  em.focus()
+}
+
+function emailStep(m) {
+  if (!m.claimed && group.draw) { render(`${header()}<section class="card"><p>The draw already happened, so new people can't join.</p></section>`); return }
+  render(`${header()}
+    <section class="card">
+      <h2>${m.claimed ? `Welcome back, ${esc(m.name)}` : `You're ${esc(m.name)}?`}</h2>
+      <div id="otpbox"></div>
+    </section>`)
+  const intro = m.claimed
+    ? (m.email_hint ? `Enter your email (${esc(m.email_hint)}) and we'll send you a code.` : "Enter your email and we'll send you a code. From now on it's how you log in as " + esc(m.name) + '.')
+    : 'Enter your email. This phone will open your match, so use the phone you\'ll have at Christmas. Your email lets you log back in from anywhere.'
+  otpFlow($app.querySelector('#otpbox'), {
+    intro, onBack: pickName,
+    onJwt: async (jwt) => {
+      const token = L.newToken()
+      if (m.claimed) {
+        await L.api.login(code, m.id, token, jwt)
+        me = { memberId: m.id, priv: loadKey(m.id), token }
+      } else {
+        const kp = await L.newKeyPair()
+        await L.api.claim(code, m.id, kp.pub, null, token, jwt)
+        me = { memberId: m.id, priv: kp.priv, token }
+      }
+      saveMe(me)
+      await refresh()
+    },
+  })
 }
 
 // ---------- home ----------
@@ -121,8 +185,11 @@ async function home() {
   const joined = group.members.filter((m) => m.claimed).length
   let match = null, matchErr = ''
   if (group.draw) {
-    try { match = await L.openBox(me.priv, group.draw.assignments[me.memberId]) }
-    catch { matchErr = "This phone can't open your match. Ask the host for help." }
+    if (!me.priv) matchErr = 'Your match only opens on the phone you first joined on (or your screenshot). You can still see and add gift ideas here.'
+    else {
+      try { match = await L.openBox(me.priv, group.draw.assignments[me.memberId]) }
+      catch { matchErr = "This phone can't open your match. Check the phone you first joined on." }
+    }
   }
   const them = match && group.members.find((m) => m.id === match.to)
   try { ideas = await L.api.ideas(code, me.memberId, me.token) } catch { ideas = [] }
@@ -133,6 +200,12 @@ async function home() {
   }
 
   render(`${header()}
+    ${mine.email_hint ? '' : `
+      <section class="card" id="addemail">
+        <h2>Add your email</h2>
+        <div id="emailbox"><p class="muted small">So you can log back in from any phone or computer to see and add gift ideas.</p>
+          <button id="addemailbtn" class="secondary">Add email</button></div>
+      </section>`}
     ${group.draw ? `
       <section class="card feature">
         <p class="eyebrow">You're buying for</p>
@@ -143,7 +216,7 @@ async function home() {
           <p class="eyebrow" style="margin-top:14px">Ideas from the group</p>
           ${ideaList(match.to) || `<p class="muted small">No ideas yet. The group can add them below.</p>`}
           <p class="note">Take a screenshot of this. Your match only opens on this phone.</p>
-        ` : `<p class="error">${esc(matchErr)}</p>`}
+        ` : `<p class="muted">${esc(matchErr)}</p>`}
       </section>` : `
       <section class="card">
         <h2>The draw</h2>
@@ -186,8 +259,8 @@ async function home() {
     </section>
 
     <footer class="stack">
-      <div>Signed in as ${esc(mine.name)}.
-        <button class="link" id="notme">Not you?</button></div>
+      <div>Signed in as ${esc(mine.name)}${mine.email_hint ? ` (${esc(mine.email_hint)})` : ''}.
+        <button class="link" id="notme">Sign out</button></div>
       <div id="rcbox"></div>
     </footer>`)
 
@@ -198,8 +271,17 @@ async function home() {
     catch (e) { msg.textContent = e.message }
   }
   $app.querySelector('#notme').onclick = () => {
-    if (confirmInline('#rcbox', "Signing out removes your key from this phone. Your match won't open here again.", 'Sign out', () => { forgetMe(); me = null; pickName() })) return
+    const text = mine.email_hint
+      ? `Sign out of this phone? Log back in any time with your email (${mine.email_hint}).`
+      : "You haven't added an email yet, so you can't log back in as yourself. Add one first."
+    confirmInline('#rcbox', text, 'Sign out', () => { forgetMe(); me = null; pickName() })
   }
+  const addEmail = $app.querySelector('#addemailbtn')
+  if (addEmail) addEmail.onclick = () => otpFlow($app.querySelector('#emailbox'), {
+    intro: "Enter your email. We'll send a code to confirm it.",
+    onBack: () => home(),
+    onJwt: async (jwt) => { await L.api.setEmail(code, me.memberId, me.token, jwt); await refresh() },
+  })
   const ideaText = $app.querySelector('#ideatext'), ideaErr = $app.querySelector('#ideaerr')
   $app.querySelector('#addidea').onclick = async (e) => {
     const items = splitItems(ideaText.value)
