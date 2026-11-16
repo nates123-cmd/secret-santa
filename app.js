@@ -426,7 +426,7 @@ async function hostPage(note = '') {
     return
   }
   const invite = `${location.origin}${location.pathname}#g=${encodeURIComponent(code)}`
-  const joined = h.members.filter((m) => m.email).length
+  const joined = h.members.filter((m) => m.logged_in).length
   render(`<h1>${esc(h.name)}</h1>
     <p class="sub">Host view &middot; ${h.budget ? `Budget: ${esc(h.budget)} &middot; ` : ''}Everyone sees the full list ${esc(fmtReveal(h.reveal_at))}</p>
     ${note ? `<p class="note">${esc(note)}</p>` : ''}
@@ -443,10 +443,10 @@ async function hostPage(note = '') {
 
     <section class="card">
       <h2>Who's logged in</h2>
-      <p class="muted small">${joined} of ${h.members.length}. The first email to confirm a name becomes that name's login.</p>
+      <p class="muted small">${joined} of ${h.members.length} have logged in. Each name opens only with the email shown; a name with no email takes the first one confirmed for it.</p>
       <ul class="roster">${h.members.map((m) => `
-        <li><span><span class="dot ${m.email ? 'on' : ''}"></span>${esc(m.name)}${m.has_wishlist ? ' <span class="muted small">(wishlist)</span>' : ''}</span>
-        <span class="muted small">${m.email ? `${esc(m.email)} <button class="link reset" data-id="${m.id}">Reset</button>` : 'not yet'}</span></li>`).join('')}
+        <li><span><span class="dot ${m.logged_in ? 'on' : ''}"></span>${esc(m.name)}${m.has_wishlist ? ' <span class="muted small">(wishlist)</span>' : ''}</span>
+        <span class="muted small">${m.email ? `${esc(m.email)} <button class="link reset" data-id="${m.id}">Reset</button>` : 'no email yet'}</span></li>`).join('')}
       </ul>
       <div id="resetbox"></div>
       ${h.exclusions?.length ? `<p class="note">Can't draw each other: ${h.exclusions.map((p) => esc(p.join(' & '))).join(', ')}.</p>` : ''}

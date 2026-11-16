@@ -82,7 +82,8 @@ begin
   return (select jsonb_build_object(
     'id', g.id, 'name', g.name, 'budget', g.budget, 'reveal_at', g.reveal_at, 'exclusions', g.exclusions,
     'members', coalesce((select jsonb_agg(jsonb_build_object(
-        'id', m.id, 'name', m.name, 'email', m.email, 'has_wishlist', length(trim(m.wishlist)) > 0)
+        'id', m.id, 'name', m.name, 'email', m.email, 'has_wishlist', length(trim(m.wishlist)) > 0,
+        'logged_in', m.token_hash is not null or exists (select 1 from public.santa_sessions s where s.member = m.id))
         order by m.name) from public.santa_members m where m.group_id = g.id), '[]'::jsonb),
     'drawn_at', (select d.created_at from public.santa_open_draws d where d.group_id = g.id),
     'pairs', public.santa_open_pairs(g.id))
