@@ -1,9 +1,11 @@
-import * as L from './lib.js?v=3'
+import * as L from './lib.js?v=4'
 
 const $app = document.getElementById('app')
 const LAST = 'santa:last'
 const normPw = (s) => String(s || '').trim().toLowerCase()
-let code = normPw(new URLSearchParams(location.hash.slice(1)).get('g')) || (() => { try { return localStorage.getItem(LAST) } catch { return null } })()
+const HASH = new URLSearchParams(location.hash.slice(1))
+const hostCode = (HASH.get('host') || '').trim()
+let code = normPw(HASH.get('g')) || (() => { try { return localStorage.getItem(LAST) } catch { return null } })()
 let KEY = `santa:${code}`
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -57,6 +59,8 @@ let me = loadMe()
 let photo = null
 let ideas = []
 let revealTimer = null
+// Open groups have a host who isn't playing and can see every match; nothing is sealed to a phone.
+const isOpen = () => group?.mode === 'open'
 
 const render = (html) => { $app.innerHTML = html }
 const header = () => `
@@ -86,7 +90,9 @@ async function loadPhoto() {
 async function refresh() {
   group = await L.api.group(code)
   if (photo === null) await loadPhoto()
-  if (me && !group.members.some((m) => m.id === me.memberId)) { forgetMe(); me = null }
+  const mine = me && group.members.find((m) => m.id === me.memberId)
+  // gone from the group, or (open groups) the host cleared this name's login
+  if (me && (!mine || (isOpen() && !mine.claimed))) { forgetMe(); me = null }
   me ? home() : pickName()
 }
 
@@ -97,7 +103,7 @@ function pickName() {
       <h2>Who are you?</h2>
       <p class="muted small">Tap your name, then confirm with your email.</p>
       <div class="names">${group.members.map((m) => `
-        <button class="name-btn" data-id="${m.id}" ${!m.claimed && group.draw ? 'disabled' : ''}>${esc(m.name)}<span class="tag">${m.claimed ? 'log in' : ''}</span></button>`).join('')}
+        <button class="name-btn" data-id="${m.id}" ${!m.claimed && group.draw && !isOpen() ? 'disabled' : ''}>${esc(m.name)}<span class="tag">${m.claimed ? 'log in' : ''}</span></button>`).join('')}
       </div>
     </section>
     ${privacyNote()}`)
@@ -152,7 +158,7 @@ function otpFlow(box, { intro, email = '', onJwt, onBack }) {
 }
 
 function emailStep(m) {
-  if (!m.claimed && group.draw) { render(`${header()}<section class="card"><p>The draw already happened, so new people can't join.</p></section>`); return }
+  if (!m.claimed && group.draw && !isOpen()) { render(`${header()}<section class="card"><p>The draw already happened, so new people can't join.</p></section>`); return }
   render(`${header()}
     <section class="card">
       <h2>${m.claimed ? `Welcome back, ${esc(m.name)}` : `You're ${esc(m.name)}?`}</h2>
@@ -160,12 +166,13 @@ function emailStep(m) {
     </section>`)
   const intro = m.claimed
     ? (m.email_hint ? `Enter your email (${esc(m.email_hint)}) and we'll send you a code.` : "Enter your email and we'll send you a code. From now on it's how you log in as " + esc(m.name) + '.')
+    : isOpen() ? `Enter your email and we'll send you a code. From now on it's how you log in as ${esc(m.name)}, from any phone or computer.`
     : 'Enter your email. This phone will open your match, so use the phone you\'ll have at Christmas. Your email lets you log back in from anywhere.'
   otpFlow($app.querySelector('#otpbox'), {
     intro, onBack: pickName,
     onJwt: async (jwt) => {
       const token = L.newToken()
-      if (m.claimed) {
+      if (m.claimed || isOpen()) {
         await L.api.login(code, m.id, token, jwt)
         me = { memberId: m.id, priv: loadKey(m.id), token }
       } else {
@@ -184,7 +191,16 @@ async function home() {
   const mine = group.members.find((m) => m.id === me.memberId)
   const joined = group.members.filter((m) => m.claimed).length
   let match = null, matchErr = ''
-  if (group.draw) {
+  if (isOpen()) {
+    if (group.draw) {
+      try { match = await L.api.myMatch(code, me.memberId, me.token) }
+      catch (e) {
+        if (e.message === 'not allowed') { forgetMe(); me = null; return pickName() }
+        matchErr = "Couldn't load your match. Check your connection and reload."
+      }
+      if (!match && !matchErr) matchErr = "Couldn't load your match. Reload to try again."
+    }
+  } else if (group.draw) {
     if (!me.priv) matchErr = 'Your match only opens on the phone you first joined on (or your screenshot). You can still see and add gift ideas here.'
     else {
       try { match = await L.openBox(me.priv, group.draw.assignments[me.memberId]) }
@@ -219,8 +235,13 @@ async function home() {
           ${them?.wishlist ? `<div class="wish">${rich(them.wishlist)}</div>` : `<p class="muted">${esc(match.name)} hasn't added a wishlist yet.</p>`}
           <p class="eyebrow" style="margin-top:14px">Ideas from the group</p>
           ${ideaList(match.to) || `<p class="muted small">No ideas yet. The group can add them below.</p>`}
-          <p class="note">Take a screenshot of this. Your match only opens on this phone.</p>
+          ${isOpen() ? '' : '<p class="note">Take a screenshot of this. Your match only opens on this phone.</p>'}
         ` : `<p class="muted">${esc(matchErr)}</p>`}
+      </section>` : isOpen() ? `
+      <section class="card">
+        <h2>The draw</h2>
+        <p>Names haven't been drawn yet.</p>
+        <p class="muted small">Check back soon. Once the host draws names, your match shows up right here. Add your wishlist below in the meantime.</p>
       </section>` : `
       <section class="card">
         <h2>The draw</h2>
@@ -266,6 +287,7 @@ async function home() {
         <li><span><span class="dot ${m.claimed ? 'on' : ''}"></span>${esc(m.name)}${m.id === me.memberId ? ' <span class="muted small">(you)</span>' : ''}</span>
         <span class="muted small">${m.claimed ? 'joined' : 'waiting'}</span></li>`).join('')}
       </ul>
+      ${isOpen() ? openNote() : ''}
       ${group.exclusions?.length ? `<p class="note">Can't draw each other: ${group.exclusions.map((p) => esc(p.join(' & '))).join(', ')}.</p>` : ''}
     </section>
 
@@ -335,25 +357,36 @@ function renderReveal() {
   const body = $app.querySelector('#revealbody')
   if (!body) return
   const at = Date.parse(group.reveal_at)
-  if (!group.draw) { body.innerHTML = `<p class="muted">After the draw, the full list is locked until ${esc(fmtReveal(group.reveal_at))}.</p>`; return }
+  if (!group.draw) {
+    body.innerHTML = `<p class="muted">After the draw, ${isOpen() ? 'you only see your own match. The full list opens for everyone' : 'the full list is locked until'} ${esc(fmtReveal(group.reveal_at))}.</p>`
+    return
+  }
   const left = at - Date.now()
   if (left > 0) {
     const d = Math.floor(left / 864e5), h = Math.floor(left / 36e5) % 24, m = Math.floor(left / 6e4) % 60, s = Math.floor(left / 1e3) % 60
     body.innerHTML = `<div class="countdown">${d ? `${d}d ` : ''}${h}h ${m}m${d ? '' : ` ${s}s`}</div>
-      <p class="muted small">Until the full list opens. It's locked with a key that won't exist until then, so nobody can open it early, not even the host.</p>`
+      <p class="muted small">${isOpen() ? 'Until everyone can see the full list. Until then you only see your own match.'
+        : "Until the full list opens. It's locked with a key that won't exist until then, so nobody can open it early, not even the host."}</p>`
     revealTimer = setTimeout(renderReveal, d ? 60000 : 1000)
     return
   }
   body.innerHTML = `<p class="muted">Opening the list...</p>`
-  L.unTimelock(group.draw.reveal_ct).then((list) => {
-    body.innerHTML = `<ul class="pairs">${list.map((p) => `<li>${esc(p.from)}<span class="arrow">&rarr;</span>${esc(p.to)}</li>`).join('')}</ul>`
+  const full = isOpen()
+    ? (group.pairs ? Promise.resolve(group.pairs) : L.api.group(code).then((g) => { if (!g.pairs) throw new Error('not yet'); group.pairs = g.pairs; return g.pairs }))
+    : L.unTimelock(group.draw.reveal_ct)
+  full.then((list) => {
+    body.innerHTML = pairList(list)
   }).catch(() => {
-    body.innerHTML = `<p class="muted">Almost there. Waiting for the unlock key...</p>`
+    body.innerHTML = `<p class="muted">Almost there. ${isOpen() ? 'Opening the list...' : 'Waiting for the unlock key...'}</p>`
     revealTimer = setTimeout(renderReveal, 10000)
   })
 }
 
+const pairList = (list) => `<ul class="pairs">${list.map((p) => `<li>${esc(p.from)}<span class="arrow">&rarr;</span>${esc(p.to)}</li>`).join('')}</ul>`
+const openNote = () => `<p class="note">Only you can see who you have. The host set this group up, isn't playing, and can see the full list in case anyone gets stuck.</p>`
+
 function privacyNote() {
+  if (isOpen()) return openNote()
   return `<p class="note">How the secret stays secret: your match is sealed on the phones themselves, and the server only stores scrambled data. The full list stays locked until Christmas morning.</p>`
 }
 
@@ -383,6 +416,76 @@ async function open(pw) {
   }
 }
 
-open(code)
+// ---------- host (open groups) ----------
+// Opened from the host link (#g=<password>&host=<host code>). The host isn't playing: this page shows
+// who has logged in and every match, and is where names get drawn.
+async function hostPage(note = '') {
+  let h
+  try { h = await L.api.host(code, hostCode) } catch (e) {
+    render(`<h1>Secret Santa</h1><section class="card"><p>${e.message === 'not allowed' ? "This host link doesn't match a group." : esc(e.message)}</p></section>`)
+    return
+  }
+  const invite = `${location.origin}${location.pathname}#g=${encodeURIComponent(code)}`
+  const joined = h.members.filter((m) => m.email).length
+  render(`<h1>${esc(h.name)}</h1>
+    <p class="sub">Host view &middot; ${h.budget ? `Budget: ${esc(h.budget)} &middot; ` : ''}Everyone sees the full list ${esc(fmtReveal(h.reveal_at))}</p>
+    ${note ? `<p class="note">${esc(note)}</p>` : ''}
+    <section class="card feature">
+      <p class="eyebrow">Who has whom</p>
+      ${h.pairs ? `${pairList(h.pairs)}
+        <p class="muted small" style="margin-top:10px">Drawn ${esc(fmtReveal(h.drawn_at))}. Each person sees only their own line when they log in.</p>` : `
+        <p class="muted">Names haven't been drawn yet. People can log in and add wishlists before or after the draw.</p>`}
+      <div class="stack" id="drawbox" style="margin-top:12px">
+        <button id="draw" class="${h.pairs ? 'secondary' : ''}">${h.pairs ? 'Draw again' : 'Draw names'}</button>
+        <p class="error" id="derr"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Who's logged in</h2>
+      <p class="muted small">${joined} of ${h.members.length}. The first email to confirm a name becomes that name's login.</p>
+      <ul class="roster">${h.members.map((m) => `
+        <li><span><span class="dot ${m.email ? 'on' : ''}"></span>${esc(m.name)}${m.has_wishlist ? ' <span class="muted small">(wishlist)</span>' : ''}</span>
+        <span class="muted small">${m.email ? `${esc(m.email)} <button class="link reset" data-id="${m.id}">Reset</button>` : 'not yet'}</span></li>`).join('')}
+      </ul>
+      <div id="resetbox"></div>
+      ${h.exclusions?.length ? `<p class="note">Can't draw each other: ${h.exclusions.map((p) => esc(p.join(' & '))).join(', ')}.</p>` : ''}
+    </section>
+
+    <section class="card stack">
+      <h2>Send this to the family</h2>
+      <p class="muted small">Link (already has the password in it):</p>
+      <div class="wish">${esc(invite)}</div>
+      <p class="muted small">Or the group password: <strong>${esc(code)}</strong>. They tap their name, enter their email, and type the code we send.</p>
+      <p class="note">Keep this host page to yourself. Its link is the only thing that opens the full list.</p>
+    </section>`)
+
+  const ask = (sel, text, label, fn) => {
+    const box = $app.querySelector(sel)
+    box.classList.add('stack')
+    box.innerHTML = `<p>${esc(text)}</p><button id="yes">${esc(label)}</button><button class="secondary" id="no">Cancel</button><p class="error" id="cerr"></p>`
+    box.querySelector('#no').onclick = () => hostPage()
+    box.querySelector('#yes').onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Working...'
+      try { await fn() } catch (err) { box.querySelector('#cerr').textContent = err.message; e.target.disabled = false; e.target.textContent = label }
+    }
+  }
+  const runDraw = async (redo) => {
+    const fresh = await L.api.host(code, hostCode)
+    await L.api.hostDraw(code, hostCode, L.makeDraw(fresh.members, fresh.exclusions || []), redo)
+    await hostPage(redo ? 'Names redrawn. Anyone who already looked has a new match, so let them know.' : 'Names drawn.')
+  }
+  $app.querySelector('#draw').onclick = () => h.pairs
+    ? ask('#drawbox', 'Draw again? Everyone gets a new match, including people who have already looked.', 'Yes, redraw', () => runDraw(true))
+    : ask('#drawbox', `Draw names for all ${h.members.length} people now?`, 'Yes, draw names', () => runDraw(false))
+  $app.querySelectorAll('.reset').forEach((b) => b.onclick = () => {
+    const m = h.members.find((x) => x.id === b.dataset.id)
+    ask('#resetbox', `Clear the email on ${m.name}? They get signed out and the next person to confirm an email becomes ${m.name}. Wishlist and match stay.`,
+      'Yes, reset', async () => { await L.api.hostReset(code, hostCode, m.id); await hostPage(`${m.name} was reset.`) })
+  })
+}
+
+if (hostCode && code) hostPage()
+else open(code)
 window.addEventListener('hashchange', () => location.reload())
 

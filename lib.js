@@ -53,6 +53,12 @@ export const api = {
     rpc('santa_delete_idea', { p_code: code, p_member: member, p_token: token, p_id: id }),
   draw: (code, assignments, revealCt, revealRound) =>
     rpc('santa_draw', { p_code: code, p_assignments: assignments, p_reveal_ct: revealCt, p_reveal_round: revealRound }),
+  // open groups: nothing sealed, the server hands each person their own match and the host sees all
+  myMatch: (code, member, token) => rpc('santa_my_match', { p_code: code, p_member: member, p_token: token }),
+  host: (code, host) => rpc('santa_host', { p_code: code, p_host: host }),
+  hostDraw: (code, host, pairs, redo) =>
+    rpc('santa_host_draw', { p_code: code, p_host: host, p_pairs: pairs, p_redo: !!redo }),
+  hostReset: (code, host, member) => rpc('santa_host_reset', { p_code: code, p_host: host, p_member: member }),
 }
 
 // ---------- randomness ----------
