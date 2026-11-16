@@ -1,4 +1,4 @@
-import * as L from './lib.js?v=4'
+import * as L from './lib.js?v=5'
 
 const $app = document.getElementById('app')
 const LAST = 'santa:last'
@@ -66,7 +66,8 @@ const render = (html) => { $app.innerHTML = html }
 const header = () => `
   ${photo ? `<figure class="feature-photo"><img src="${photo}" alt="Leo the elf in a Santa hat"><figcaption>Leo the Elf is watching</figcaption></figure>` : ''}
   <h1>${esc(group.name)}</h1>
-  <p class="sub">${group.budget ? `Budget: ${esc(group.budget)} &middot; ` : ''}Full list opens ${esc(fmtReveal(group.reveal_at))}</p>`
+  <p class="sub">${isOpen() ? (group.budget ? `Budget: ${esc(group.budget)}` : '')
+    : `${group.budget ? `Budget: ${esc(group.budget)} &middot; ` : ''}Full list opens ${esc(fmtReveal(group.reveal_at))}`}</p>`
 
 async function loadPhoto() {
   const k = `santa:photo:${code}`
@@ -276,10 +277,10 @@ async function home() {
       <p class="small muted" id="wlmsg"></p>
     </section>
 
-    <section class="card" id="reveal">
+    ${isOpen() ? '' : `<section class="card" id="reveal">
       <h2>Christmas reveal</h2>
       <div id="revealbody"></div>
-    </section>
+    </section>`}
 
     <section class="card">
       <h2>Who's in</h2>
@@ -358,32 +359,28 @@ function renderReveal() {
   if (!body) return
   const at = Date.parse(group.reveal_at)
   if (!group.draw) {
-    body.innerHTML = `<p class="muted">After the draw, ${isOpen() ? 'you only see your own match. The full list opens for everyone' : 'the full list is locked until'} ${esc(fmtReveal(group.reveal_at))}.</p>`
+    body.innerHTML = `<p class="muted">After the draw, the full list is locked until ${esc(fmtReveal(group.reveal_at))}.</p>`
     return
   }
   const left = at - Date.now()
   if (left > 0) {
     const d = Math.floor(left / 864e5), h = Math.floor(left / 36e5) % 24, m = Math.floor(left / 6e4) % 60, s = Math.floor(left / 1e3) % 60
     body.innerHTML = `<div class="countdown">${d ? `${d}d ` : ''}${h}h ${m}m${d ? '' : ` ${s}s`}</div>
-      <p class="muted small">${isOpen() ? 'Until everyone can see the full list. Until then you only see your own match.'
-        : "Until the full list opens. It's locked with a key that won't exist until then, so nobody can open it early, not even the host."}</p>`
+      <p class="muted small">Until the full list opens. It's locked with a key that won't exist until then, so nobody can open it early, not even the host.</p>`
     revealTimer = setTimeout(renderReveal, d ? 60000 : 1000)
     return
   }
   body.innerHTML = `<p class="muted">Opening the list...</p>`
-  const full = isOpen()
-    ? (group.pairs ? Promise.resolve(group.pairs) : L.api.group(code).then((g) => { if (!g.pairs) throw new Error('not yet'); group.pairs = g.pairs; return g.pairs }))
-    : L.unTimelock(group.draw.reveal_ct)
-  full.then((list) => {
+  L.unTimelock(group.draw.reveal_ct).then((list) => {
     body.innerHTML = pairList(list)
   }).catch(() => {
-    body.innerHTML = `<p class="muted">Almost there. ${isOpen() ? 'Opening the list...' : 'Waiting for the unlock key...'}</p>`
+    body.innerHTML = `<p class="muted">Almost there. Waiting for the unlock key...</p>`
     revealTimer = setTimeout(renderReveal, 10000)
   })
 }
 
 const pairList = (list) => `<ul class="pairs">${list.map((p) => `<li>${esc(p.from)}<span class="arrow">&rarr;</span>${esc(p.to)}</li>`).join('')}</ul>`
-const openNote = () => `<p class="note">Only you can see who you have. The host set this group up, isn't playing, and can see the full list in case anyone gets stuck.</p>`
+const openNote = () => `<p class="note">Only you can see who you have, so it's yours to reveal. The host set this group up, isn't playing, and can see the full list in case anyone gets stuck.</p>`
 
 function privacyNote() {
   if (isOpen()) return openNote()
@@ -428,12 +425,12 @@ async function hostPage(note = '') {
   const invite = `${location.origin}${location.pathname}#g=${encodeURIComponent(code)}`
   const joined = h.members.filter((m) => m.logged_in).length
   render(`<h1>${esc(h.name)}</h1>
-    <p class="sub">Host view &middot; ${h.budget ? `Budget: ${esc(h.budget)} &middot; ` : ''}Everyone sees the full list ${esc(fmtReveal(h.reveal_at))}</p>
+    <p class="sub">Host view${h.budget ? ` &middot; Budget: ${esc(h.budget)}` : ''}</p>
     ${note ? `<p class="note">${esc(note)}</p>` : ''}
     <section class="card feature">
       <p class="eyebrow">Who has whom</p>
       ${h.pairs ? `${pairList(h.pairs)}
-        <p class="muted small" style="margin-top:10px">Drawn ${esc(fmtReveal(h.drawn_at))}. Each person sees only their own line when they log in.</p>` : `
+        <p class="muted small" style="margin-top:10px">Drawn ${esc(fmtReveal(h.drawn_at))}. Each person sees only their own line when they log in. Nobody else ever gets this list.</p>` : `
         <p class="muted">Names haven't been drawn yet. People can log in and add wishlists before or after the draw.</p>`}
       <div class="stack" id="drawbox" style="margin-top:12px">
         <button id="draw" class="${h.pairs ? 'secondary' : ''}">${h.pairs ? 'Draw again' : 'Draw names'}</button>

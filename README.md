@@ -8,7 +8,7 @@ A small Elfster replacement where nobody, including the host, can see who drew w
 
 ## Open groups (host knows the list)
 
-A group with `mode = 'open'` is for a host who isn't playing. Nothing is sealed: the pairing sits in `santa_open_draws`, each person logs in (tap name, email code) and `santa_my_match` hands them only their own match, from any device. The host link `#g=<invite_code>&host=<host_code>` shows who has logged in and the full list, draws (or redraws) names, and can reset a name's email. Everyone sees the full list once `reveal_at` passes. Sealed groups are unaffected.
+A group with `mode = 'open'` is for a host who isn't playing. Nothing is sealed: the pairing sits in `santa_open_draws`, each person logs in (tap name, email code) and `santa_my_match` hands them only their own match, from any device. The host link `#g=<invite_code>&host=<host_code>` shows who has logged in and the full list, draws (or redraws) names, and can reset a name's email. The full list is never shown to the players; they reveal to each other. Sealed groups are unaffected.
 
 Invite link: `https://nates123-cmd.github.io/secret-santa/#g=<invite_code>`
 
